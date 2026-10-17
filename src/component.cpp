@@ -20,6 +20,11 @@
 
 #include "libsurvive_ros2/component.hpp"
 
+// tf2 headers must precede C++ system headers for the package linter.
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Vector3.h>
+
 // C++ system
 #include <cmath>
 #include <memory>
@@ -27,8 +32,6 @@
 #include <vector>
 
 // Other
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2/LinearMath/Vector3.h>
 #include "rclcpp_components/register_node_macro.hpp"
 
 
@@ -89,6 +92,38 @@ static bool has_valid_pose(const SurvivePose & pose)
          std::isfinite(pose.Pos[2]);
 }
 
+static tf2::Transform tf2_from_pose(const SurvivePose & pose)
+{
+  return tf2::Transform(
+    tf2::Quaternion(pose.Rot[1], pose.Rot[2], pose.Rot[3], pose.Rot[0]).normalized(),
+    tf2::Vector3(pose.Pos[0], pose.Pos[1], pose.Pos[2]));
+}
+
+// Make an anchor whose z axis is tracking-world up and whose x axis is the horizontal
+// projection of the controller's pointing (+z) axis. This preserves the operator's heading at
+// the A press while rejecting controller pitch and roll, which would otherwise mix horizontal
+// hand motion into vertical target motion.
+static bool gravity_levelled_anchor(const SurvivePose & pose, tf2::Transform * anchor)
+{
+  const tf2::Transform controller = tf2_from_pose(pose);
+  const tf2::Vector3 up(0.0, 0.0, 1.0);
+  tf2::Vector3 forward = controller.getBasis() * tf2::Vector3(0.0, 0.0, 1.0);
+  forward -= up * forward.dot(up);
+  if (forward.length2() < 1e-6) {
+    return false;
+  }
+  forward.normalize();
+  const tf2::Vector3 left = up.cross(forward);
+  const tf2::Matrix3x3 basis(
+    forward.x(), left.x(), up.x(),
+    forward.y(), left.y(), up.y(),
+    forward.z(), left.z(), up.z());
+  tf2::Quaternion rotation;
+  basis.getRotation(rotation);
+  *anchor = tf2::Transform(rotation.normalized(), controller.getOrigin());
+  return true;
+}
+
 namespace libsurvive_ros2
 {
 
@@ -106,6 +141,23 @@ Component::Component(const rclcpp::NodeOptions & options)
   this->get_parameter("tracking_frame", tracking_frame_);
   this->declare_parameter("lighthouse_rate", 4.0);
   this->get_parameter("lighthouse_rate", lighthouse_rate_);
+  thumbstick_edge_ = this->declare_parameter("thumbstick_edge", 0.9);
+
+  // Fixed placement of the tracking frame under the robot base (see config/vive_devices.yaml).
+  const std::string robot_frame = this->declare_parameter<std::string>("robot_frame", "");
+  const std::vector<double> xyz = this->declare_parameter<std::vector<double>>(
+    "tracking_frame_xyz", {0.0, 0.0, 0.0});
+  if (!robot_frame.empty() && xyz.size() == 3) {
+    geometry_msgs::msg::TransformStamped placement;
+    placement.header.stamp = this->get_clock()->now();
+    placement.header.frame_id = robot_frame;
+    placement.child_frame_id = tracking_frame_;
+    placement.transform.translation.x = xyz[0];
+    placement.transform.translation.y = xyz[1];
+    placement.transform.translation.z = xyz[2];
+    placement.transform.rotation.w = 1.0;
+    tf_static_broadcaster_->sendTransform(placement);
+  }
 
   // Setup topic for IMU.
   std::string imu_topic;
@@ -130,6 +182,42 @@ Component::Component(const rclcpp::NodeOptions & options)
   this->declare_parameter("cfg_topic", "cfg");
   this->get_parameter("cfg_topic", cfg_topic);
   cfg_publisher_ = this->create_publisher<diagnostic_msgs::msg::KeyValue>(cfg_topic, 10);
+
+  // Setup hands for anchoring (see config/vive_devices.yaml).
+  for (const std::string side : {"left", "right"}) {
+    Hand hand;
+    hand.serial = this->declare_parameter<std::string>(side + "_serial", "");
+    hand.anchor_frame = this->declare_parameter<std::string>(
+      side + "_anchor_frame", side + "_anchor");
+    hand.target_frame = this->declare_parameter<std::string>(
+      side + "_target_frame", side + "_target");
+    const std::string target_topic = this->declare_parameter<std::string>(
+      side + "_target_topic", "/vive/" + side + "/target");
+    const std::string trigger_topic = this->declare_parameter<std::string>(
+      side + "_trigger_topic", "/vive/" + side + "/trigger");
+    const std::string b_button_topic = this->declare_parameter<std::string>(
+      side + "_b_button_topic", "/vive/" + side + "/b_button");
+    const std::string thumbstick_topic = this->declare_parameter<std::string>(
+      side + "_thumbstick_topic", "/vive/" + side + "/thumbstick");
+    const std::vector<double> grip = this->declare_parameter<std::vector<double>>(
+      side + "_grip_offset", {0.0, 0.0, 0.0});
+    hand.grip.setIdentity();
+    hand.grip.setOrigin(tf2::Vector3(grip.at(0), grip.at(1), grip.at(2)));
+    if (hand.serial.empty()) {
+      continue;
+    }
+    hand.target_publisher =
+      this->create_publisher<geometry_msgs::msg::PoseStamped>(target_topic, 10);
+    hand.trigger_publisher = this->create_publisher<std_msgs::msg::Float32>(trigger_topic, 10);
+    hand.b_button_publisher = this->create_publisher<std_msgs::msg::Empty>(b_button_topic, 10);
+    // Latched, so a subscriber that joins late still gets the current direction.
+    hand.thumbstick_publisher = this->create_publisher<std_msgs::msg::String>(
+      thumbstick_topic, rclcpp::QoS(1).transient_local());
+    RCLCPP_INFO(
+      this->get_logger(), "%s hand: press A on %s to set %s, touch trackpad to move %s",
+      side.c_str(), hand.serial.c_str(), hand.anchor_frame.c_str(), hand.target_frame.c_str());
+    hands_.push_back(hand);
+  }
 
   // Setup driver parameters.
   std::string driver_args;
@@ -201,6 +289,104 @@ void Component::publish_velocity(const geometry_msgs::msg::TwistStamped & msg)
   }
 }
 
+Component::Hand * Component::find_hand(const std::string & serial)
+{
+  for (Hand & hand : hands_) {
+    if (hand.serial == serial) {
+      return &hand;
+    }
+  }
+  return nullptr;
+}
+
+void Component::set_anchor(Hand & hand, const SurviveSimpleObject * obj)
+{
+  SurvivePose pose = {};
+  const auto timecode = survive_simple_object_get_latest_pose(obj, &pose);
+  if (timecode <= 0 || !has_valid_pose(pose)) {
+    RCLCPP_WARN(
+      this->get_logger(), "A pressed on %s but it is not tracked (no valid pose yet)", hand.serial.c_str());
+    return;
+  }
+  if (!gravity_levelled_anchor(pose, &hand.anchor)) {
+    RCLCPP_WARN(
+      this->get_logger(), "A pressed on %s while its pointing axis is vertical",
+      hand.serial.c_str());
+    return;
+  }
+  hand.target.setIdentity();
+  hand.clutched = false;  // re-engages against the new anchor on the next pose
+  hand.has_anchor = true;
+
+  // The C++ static broadcaster replaces an existing child frame, so re-anchoring works.
+  geometry_msgs::msg::TransformStamped anchor_msg;
+  anchor_msg.header.stamp = this->get_ros_time("anchor", timecode);
+  anchor_msg.header.frame_id = tracking_frame_;
+  anchor_msg.child_frame_id = hand.anchor_frame;
+  const tf2::Vector3 & anchor_position = hand.anchor.getOrigin();
+  const tf2::Quaternion & anchor_rotation = hand.anchor.getRotation();
+  anchor_msg.transform.translation.x = anchor_position.x();
+  anchor_msg.transform.translation.y = anchor_position.y();
+  anchor_msg.transform.translation.z = anchor_position.z();
+  anchor_msg.transform.rotation.x = anchor_rotation.x();
+  anchor_msg.transform.rotation.y = anchor_rotation.y();
+  anchor_msg.transform.rotation.z = anchor_rotation.z();
+  anchor_msg.transform.rotation.w = anchor_rotation.w();
+  tf_static_broadcaster_->sendTransform(anchor_msg);
+  RCLCPP_INFO(
+    this->get_logger(), "%s gravity-levelled at (%+.3f, %+.3f, %+.3f)",
+    hand.anchor_frame.c_str(), pose.Pos[0], pose.Pos[1], pose.Pos[2]);
+}
+
+void Component::update_target(Hand & hand, const SurvivePose & pose, const rclcpp::Time & stamp)
+{
+  if (!hand.has_anchor) {
+    return;
+  }
+  // Track the grip point rather than the tracking origin, so twisting the controller about
+  // where it is held turns the target in place instead of swinging it through an arc.
+  const tf2::Transform controller = hand.anchor.inverse() * tf2_from_pose(pose) * hand.grip;
+  if (hand.trackpad_touched && !hand.clutched) {
+    hand.clutch_controller = controller;
+    hand.clutch_target = hand.target;
+  }
+  hand.clutched = hand.trackpad_touched;
+
+  // Apply only the motion made since the clutch engaged, in anchor-frame axes, so
+  // releasing freezes the target and re-engaging never jumps.
+  if (hand.clutched) {
+    hand.target.setOrigin(
+      hand.clutch_target.getOrigin() +
+      (controller.getOrigin() - hand.clutch_controller.getOrigin()));
+    hand.target.setRotation(
+      (controller.getRotation() * hand.clutch_controller.getRotation().inverse() *
+      hand.clutch_target.getRotation()).normalized());
+  }
+
+  const tf2::Vector3 & p = hand.target.getOrigin();
+  const tf2::Quaternion q = hand.target.getRotation();
+  geometry_msgs::msg::TransformStamped target_tf;
+  target_tf.header.stamp = stamp;
+  target_tf.header.frame_id = hand.anchor_frame;
+  target_tf.child_frame_id = hand.target_frame;
+  target_tf.transform.translation.x = p.x();
+  target_tf.transform.translation.y = p.y();
+  target_tf.transform.translation.z = p.z();
+  target_tf.transform.rotation.x = q.x();
+  target_tf.transform.rotation.y = q.y();
+  target_tf.transform.rotation.z = q.z();
+  target_tf.transform.rotation.w = q.w();
+  tf_broadcaster_->sendTransform(target_tf);
+
+  geometry_msgs::msg::PoseStamped msg;
+  msg.header = target_tf.header;
+  msg.pose.position.x = p.x();
+  msg.pose.position.y = p.y();
+  msg.pose.position.z = p.z();
+  msg.pose.orientation = target_tf.transform.rotation;
+  hand.target_publisher->publish(msg);
+}
+
 void Component::work()
 {
   RCLCPP_INFO(this->get_logger(), "Start listening for events..");
@@ -230,6 +416,9 @@ void Component::work()
               pose_msg.child_frame_id = serial;
               ros_from_pose(&pose_msg.transform, pose);
               tf_broadcaster_->sendTransform(pose_msg);
+              if (Hand * hand = find_hand(serial)) {
+                update_target(*hand, pose, pose_msg.header.stamp);
+              }
 
               SurviveVelocity velocity = {};
               const auto velocity_timecode =
@@ -279,6 +468,41 @@ void Component::work()
             joy_msg.buttons[i] = (mask >> i) & 1;
           }
           joy_publisher_->publish(joy_msg);
+
+          if (Hand * hand = find_hand(joy_msg.header.frame_id)) {
+            const bool pressed = (mask >> SURVIVE_BUTTON_A) & 1;
+            if (pressed && !hand->a_pressed) {
+              set_anchor(*hand, obj);
+            }
+            hand->a_pressed = pressed;
+            const bool b_pressed = (mask >> SURVIVE_BUTTON_B) & 1;
+            if (b_pressed && !hand->b_pressed) {
+              hand->b_button_publisher->publish(std_msgs::msg::Empty());  // e.g. teleop: arm home
+            }
+            hand->b_pressed = b_pressed;
+            hand->trackpad_touched =
+              (mask >> (SURVIVE_BUTTON_MAX + SURVIVE_BUTTON_TRACKPAD)) & 1;
+            // The thumbstick direction held (|axis| >= thumbstick_edge, the larger axis wins):
+            // north +y, south -y, east +x, west -x, or empty.
+            const float x = joy_msg.axes[SURVIVE_AXIS_JOYSTICK_X];
+            const float y = joy_msg.axes[SURVIVE_AXIS_JOYSTICK_Y];
+            std::string direction;
+            if (std::abs(y) >= thumbstick_edge_ && std::abs(y) >= std::abs(x)) {
+              direction = y > 0 ? "north" : "south";
+            } else if (std::abs(x) >= thumbstick_edge_) {
+              direction = x > 0 ? "east" : "west";
+            }
+            if (direction != hand->thumbstick) {
+              hand->thumbstick = direction;
+              std_msgs::msg::String thumbstick;
+              thumbstick.data = direction;
+              hand->thumbstick_publisher->publish(thumbstick);
+            }
+            // The analog trigger (0 released .. 1 pulled), e.g. for the gripper.
+            std_msgs::msg::Float32 trigger;
+            trigger.data = joy_msg.axes[SURVIVE_AXIS_TRIGGER];
+            hand->trigger_publisher->publish(trigger);
+          }
           break;
         }
 

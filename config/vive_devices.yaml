@@ -1,0 +1,53 @@
+# Which tracked Vive device is which hand.
+#
+# This is the single place to change when you swap controllers/trackers.
+# Serials match the TF child frames and the Joy header.frame_id published
+# by libsurvive_ros2 (e.g. `ros2 topic echo /libsurvive/joy --field header.frame_id`).
+#
+# Loaded by the libsurvive_ros2 driver via launch/libsurvive_ros2.launch.py.
+# Standard ROS 2 params-file layout, so other nodes (e.g. teleop) can load it with:
+#   ros2 run <pkg> <node> --ros-args --params-file config/vive_devices.yaml
+/**:
+  ros__parameters:
+    left_serial: LHR-337E8983
+    right_serial: LHR-12D31191
+
+    # Pressing A saves the controller position and heading as this gravity-levelled
+    # static frame, parented to tracking_frame. Controller pitch and roll are ignored,
+    # so a tilted wrist cannot mix horizontal motion into up/down. Each new press
+    # replaces that hand's anchor.
+    tracking_frame: libsurvive_world
+    # Where tracking_frame sits under the robot (static TF robot_frame -> tracking_frame,
+    # identity rotation). Published on the VR TF topic, not the robot's /tf.
+    robot_frame: base
+    tracking_frame_xyz: [0.0, 0.0, 2.0]
+    left_anchor_frame: left_anchor
+    right_anchor_frame: right_anchor
+
+    # Clutched target, expressed in the anchor frame (TF <anchor> -> <target> and a
+    # PoseStamped on the topic). Reset to the anchor when A is pressed. While the
+    # trackpad is touched it follows the controller's motion; released, it holds still.
+    left_target_frame: left_target
+    right_target_frame: right_target
+    left_target_topic: /vive/left/target
+    right_target_topic: /vive/right/target
+    # Analog trigger per hand (std_msgs/Float32, 0 released .. 1 pulled), published on every
+    # controller input event; the teleop maps it to the gripper opening.
+    left_trigger_topic: /vive/left/trigger
+    right_trigger_topic: /vive/right/trigger
+    # B button per hand (std_msgs/Empty, once per press); the teleop sends that arm home.
+    left_b_button_topic: /vive/left/b_button
+    right_b_button_topic: /vive/right/b_button
+    # Thumbstick direction per hand (std_msgs/String, latched, on change): north (+y), south (-y),
+    # east (+x) or west (-x) while the stick is pushed at least thumbstick_edge along that axis
+    # (the larger axis wins), empty otherwise. Index sticks reach +-1 up/down but only ~0.75
+    # sideways, so 0.9 missed east/west.
+    left_thumbstick_topic: /vive/left/thumbstick
+    right_thumbstick_topic: /vive/right/thumbstick
+    thumbstick_edge: 0.6
+
+    # Grip point in each controller's own frame (m): the target follows this point, so
+    # twisting the controller about where you hold it rotates the robot about its TCP
+    # (fingertips) instead of swinging the TCP through the arc of the tracking origin.
+    left_grip_offset: [0.0, 0.0, 0.0]
+    right_grip_offset: [0.0, 0.0, 0.0]

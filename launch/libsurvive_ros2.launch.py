@@ -33,20 +33,28 @@ from launch_ros.descriptions import ComposableNode
 # Bag to save data
 BAG_FILE = os.path.join(launch.logging.launch_config.log_dir, 'libsurvive.bag')
 
-# Default libsurvive configuration file
-CFG_FILE = os.path.join(
-    get_package_share_directory('libsurvive_ros2'), 'config', 'config.json'
+# Hand serials, anchor frames and delta topics: the single place to assign controllers.
+VIVE_DEVICES_FILE = os.path.join(
+    get_package_share_directory('libsurvive_ros2'), 'config', 'vive_devices.yaml'
 )
+
+# Keep VR tracking TF off the global /tf: the Baxter ROS1 bridge forwards /tf to the
+# robot, and high-rate tracker poses there starve the arm's joint commands.
+REMAPPINGS = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
 # Sow we don't have to repeat for composable and non-composable versions.
 PARAMETERS = [
-    {'driver_args': f'--force-recalibrate 1 -c {CFG_FILE}'},
+    # Our base stations are gen 2: auto-detect has misread them as gen 1, which discards the
+    # gen 2 calibration and leaves every device untracked. Calibration persists in libsurvive's
+    # default config (~/.config/libsurvive, mounted from libsurvive_config/), so restarts reuse it.
+    {'driver_args': '--lighthouse-gen 2'},
     {'tracking_frame': 'libsurvive_world'},
     {'imu_topic': 'imu'},
     {'velocity_topic': LaunchConfiguration('velocity_topic')},
     {'joy_topic': 'joy'},
     {'cfg_topic': 'cfg'},
-    {'lighthouse_rate': 4.0}]
+    {'lighthouse_rate': 4.0},
+    VIVE_DEVICES_FILE]
 
 
 def generate_launch_description():
@@ -72,7 +80,8 @@ def generate_launch_description():
         namespace=LaunchConfiguration('namespace'),
         condition=UnlessCondition(LaunchConfiguration('composable')),
         output='screen',
-        parameters=PARAMETERS)
+        parameters=PARAMETERS,
+        remappings=REMAPPINGS)
 
     # Composable launch (zero-copy node example)
     libsurvive_composable_node = ComposableNodeContainer(
@@ -87,6 +96,7 @@ def generate_launch_description():
                 plugin='libsurvive_ros2::Component',
                 name='libsurvive_ros2_component',
                 parameters=PARAMETERS,
+                remappings=REMAPPINGS,
                 extra_arguments=[
                     {'use_intra_process_comms': True}
                 ]
