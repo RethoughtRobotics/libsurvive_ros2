@@ -127,6 +127,13 @@ install(
     launch
   DESTINATION share/${PROJECT_NAME})
 
+# Install the host-side GUI tools
+install(
+  PROGRAMS
+    scripts/vive_button_gui.py
+    scripts/vive_config.py
+  DESTINATION lib/${PROJECT_NAME})
+
 # For testing only
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
