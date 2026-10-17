@@ -21,6 +21,7 @@
 #include "libsurvive_ros2/component.hpp"
 
 // C++ system
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -77,6 +78,17 @@ static tf2::Quaternion body_from_world_quaternion(const SurvivePose & pose)
   return q_world_from_body.inverse();
 }
 
+// libsurvive reports an all-zero rotation, or a non-finite position, for objects it has not solved
+// (e.g. an HMD out of view, or controllers while the lighthouse solve has not converged); tf2
+// rejects those, and an anchor or target built on them would be meaningless, so they are dropped.
+static bool has_valid_pose(const SurvivePose & pose)
+{
+  const double norm_sq = pose.Rot[0] * pose.Rot[0] + pose.Rot[1] * pose.Rot[1] +
+    pose.Rot[2] * pose.Rot[2] + pose.Rot[3] * pose.Rot[3];
+  return norm_sq > 1e-6 && std::isfinite(pose.Pos[0]) && std::isfinite(pose.Pos[1]) &&
+         std::isfinite(pose.Pos[2]);
+}
+
 namespace libsurvive_ros2
 {
 
@@ -123,11 +135,19 @@ Component::Component(const rclcpp::NodeOptions & options)
   std::string driver_args;
   this->declare_parameter("driver_args", "--force-recalibrate 1");
   this->get_parameter("driver_args", driver_args);
-  std::vector<const char *> args;
+  // libsurvive parses these like main()'s argv, skipping argv[0] (the program name). `tokens` owns
+  // the strings: `args` only points into it, so it must outlive survive_simple_init.
+  std::vector<std::string> tokens{"libsurvive_ros2"};
   std::stringstream driver_ss(driver_args);
   std::string token;
   while (getline(driver_ss, token, ' ')) {
-    args.emplace_back(token.c_str());
+    if (!token.empty()) {
+      tokens.push_back(token);
+    }
+  }
+  std::vector<const char *> args;
+  for (const std::string & t : tokens) {
+    args.push_back(t.c_str());
   }
 
   // Try and initialize survive with the arguments supplied.
@@ -202,7 +222,7 @@ void Component::work()
           {
             SurvivePose pose = {};
             auto timecode = survive_simple_object_get_latest_pose(pose_event->object, &pose);
-            if (timecode > 0) {
+            if (timecode > 0 && has_valid_pose(pose)) {
               const std::string serial = survive_simple_serial_number(pose_event->object);
               geometry_msgs::msg::TransformStamped pose_msg;
               pose_msg.header.stamp = this->get_ros_time("tracker", timecode);
@@ -306,7 +326,7 @@ void Component::work()
         if (survive_simple_object_get_type(it) == SurviveSimpleObject_LIGHTHOUSE) {
           SurvivePose pose = {};
           auto timecode = survive_simple_object_get_latest_pose(it, &pose);
-          if (timecode > 0) {
+          if (timecode > 0 && has_valid_pose(pose)) {
             geometry_msgs::msg::TransformStamped pose_msg;
             pose_msg.header.stamp = this->get_ros_time("lighthouse", timecode);
             pose_msg.header.frame_id = tracking_frame_;

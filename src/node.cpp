@@ -31,8 +31,11 @@ int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
   rclcpp::executors::SingleThreadedExecutor exec;
-  exec.add_node(std::make_shared<libsurvive_ros2::Component>(rclcpp::NodeOptions{}));
+  // Hold the node for the lifetime of the executor, which only keeps a weak reference.
+  auto node = std::make_shared<libsurvive_ros2::Component>(rclcpp::NodeOptions{});
+  exec.add_node(node);
   exec.spin();
+  node.reset();
   rclcpp::shutdown();
   return 0;
 }
