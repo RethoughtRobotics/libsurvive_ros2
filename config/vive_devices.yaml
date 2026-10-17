@@ -9,6 +9,13 @@
 #   ros2 run <pkg> <node> --ros-args --params-file config/vive_devices.yaml
 /**:
   ros__parameters:
+    # libsurvive driver arguments (overrides the launch file's '--lighthouse-gen 2', since this file is
+    # loaded last and is mounted, so no image rebuild is needed). --force-recalibrate 1 solves the base
+    # station poses afresh on every start instead of reusing libsurvive_config/config.json, so moved base
+    # stations just work; keep a controller still in view of both stations for the first ~15 s after start.
+    # Gen 2 stays forced: auto-detect has misread them as gen 1, which leaves every device untracked.
+    driver_args: --lighthouse-gen 2 --force-recalibrate 1
+
     left_serial: LHR-337E8983
     right_serial: LHR-12D31191
 

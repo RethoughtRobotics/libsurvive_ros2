@@ -45,8 +45,8 @@ REMAPPINGS = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 # Sow we don't have to repeat for composable and non-composable versions.
 PARAMETERS = [
     # Our base stations are gen 2: auto-detect has misread them as gen 1, which discards the
-    # gen 2 calibration and leaves every device untracked. Calibration persists in libsurvive's
-    # default config (~/.config/libsurvive, mounted from libsurvive_config/), so restarts reuse it.
+    # gen 2 calibration and leaves every device untracked. config/vive_devices.yaml (loaded last)
+    # overrides this with --force-recalibrate 1, so base stations are solved afresh on every start.
     {'driver_args': '--lighthouse-gen 2'},
     {'tracking_frame': 'libsurvive_world'},
     {'imu_topic': 'imu'},
