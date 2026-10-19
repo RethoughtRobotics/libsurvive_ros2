@@ -14,8 +14,8 @@ def default_config_path():
     candidates = [os.path.join(here, '..', 'config', 'vive_devices.yaml')]
     try:
         from ament_index_python.packages import get_package_share_directory
-        candidates.append(os.path.join(
-            get_package_share_directory('libsurvive_ros2'), 'config', 'vive_devices.yaml'))
+
+        candidates.append(os.path.join(get_package_share_directory('libsurvive_ros2'), 'config', 'vive_devices.yaml'))
     except Exception:
         pass
     for path in candidates:

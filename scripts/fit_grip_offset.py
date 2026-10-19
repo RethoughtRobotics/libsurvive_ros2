@@ -17,8 +17,8 @@ Least squares for the point c in the controller frame that stays still:
 import sys
 
 import numpy as np
-from rclpy.serialization import deserialize_message
 import rosbag2_py
+from rclpy.serialization import deserialize_message
 from scipy.spatial.transform import Rotation
 from tf2_msgs.msg import TFMessage
 
