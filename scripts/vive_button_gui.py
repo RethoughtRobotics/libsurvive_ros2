@@ -12,13 +12,12 @@ Run on the host (needs a display):
 import argparse
 import threading
 import time
+import tkinter as tk
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
-import tkinter as tk
-
 from vive_config import BUTTON_MAX, default_config_path, load_vive_config
 
 # Indices follow libsurvive's enum SurviveButton / enum SurviveAxis (survive_types.h).
@@ -86,13 +85,13 @@ class HandTable(tk.Frame):
         super().__init__(master, padx=12, pady=8)
         self.serial = serial
         tk.Label(self, text=f'{side}  ({serial})', font=('TkDefaultFont', 13, 'bold')).grid(
-            row=0, column=0, columnspan=3, sticky='w')
+            row=0, column=0, columnspan=3, sticky='w'
+        )
         self.status = tk.Label(self, text='waiting for data…', fg='gray')
         self.status.grid(row=1, column=0, columnspan=3, sticky='w', pady=(0, 6))
 
         for col, title in enumerate(('Button', 'Pressed', 'Touched')):
-            tk.Label(self, text=title, font=('TkDefaultFont', 10, 'bold')).grid(
-                row=2, column=col, sticky='ew')
+            tk.Label(self, text=title, font=('TkDefaultFont', 10, 'bold')).grid(row=2, column=col, sticky='ew')
         self.button_cells = []
         for r, (name, _) in enumerate(BUTTONS, start=3):
             tk.Label(self, text=name, anchor='w', width=14).grid(row=r, column=0, sticky='w')
@@ -102,7 +101,8 @@ class HandTable(tk.Frame):
         r0 = 3 + len(BUTTONS) + 1
         for col, title in enumerate(('Axis', 'Value')):
             tk.Label(self, text=title, font=('TkDefaultFont', 10, 'bold')).grid(
-                row=r0, column=col, sticky='ew', pady=(10, 0))
+                row=r0, column=col, sticky='ew', pady=(10, 0)
+            )
         self.axis_cells = []
         for r, (name, _) in enumerate(AXES, start=r0 + 1):
             tk.Label(self, text=name, anchor='w', width=14).grid(row=r, column=0, sticky='w')
@@ -154,7 +154,8 @@ def main():
         table.grid(row=0, column=col, sticky='n')
         tables.append(table)
     tk.Label(root, text=f'config: {config}   topic: {args.topic}', fg='gray').grid(
-        row=1, column=0, columnspan=2, sticky='w', padx=12, pady=(0, 8))
+        row=1, column=0, columnspan=2, sticky='w', padx=12, pady=(0, 8)
+    )
 
     def refresh():
         for table in tables:
