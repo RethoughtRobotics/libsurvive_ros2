@@ -1,1 +1,6 @@
 .vscode
+# Machine-specific libsurvive calibration (mounted into the container)
+libsurvive_config/
+# Local recordings
+data/
+__pycache__/

@@ -54,6 +54,7 @@ find_package(rclcpp_components REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 
@@ -79,6 +80,7 @@ ament_target_dependencies(libsurvive_ros2_component
   diagnostic_msgs
   geometry_msgs
   sensor_msgs
+  std_msgs
   tf2
   tf2_ros)
 rclcpp_components_register_nodes(libsurvive_ros2_component "libsurvive_ros2::Component")
@@ -124,6 +126,13 @@ install(
     config
     launch
   DESTINATION share/${PROJECT_NAME})
+
+# Install the host-side GUI tools
+install(
+  PROGRAMS
+    scripts/vive_button_gui.py
+    scripts/vive_config.py
+  DESTINATION lib/${PROJECT_NAME})
 
 # For testing only
 if(BUILD_TESTING)

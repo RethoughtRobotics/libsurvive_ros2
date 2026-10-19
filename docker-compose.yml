@@ -25,14 +25,29 @@
 
 services:
   libsurvive_ros2:
-    build: .
+    # Same ROS distro and middleware as the Baxter stack (Kilted + Zenoh router on the host).
+    build:
+      context: .
+      args:
+        ROS_DISTRO: kilted
+    environment:
+      - RMW_IMPLEMENTATION=rmw_zenoh_cpp
+      - ROS_DOMAIN_ID  # passed through from the host shell (unset = 0)
     user: "0:0"
     privileged: true
-    ports:
-      - 8765
-      - 9090
+    network_mode: host
+    ipc: host
     volumes:
       - /dev/bus/usb:/dev/bus/usb:rw
-    entrypoint: /home/ros/ros2_ws/entrypoint.sh
+      - ./libsurvive_config:/root/.config/libsurvive:rw
+      # Device config read at launch, so editing it needs only `docker compose restart`, not a rebuild.
+      - ./config/vive_devices.yaml:/home/ros/ros2_ws/install/libsurvive_ros2/share/libsurvive_ros2/config/vive_devices.yaml:ro
+    # Reset libsurvive's floor offset on every start: auto-floor finds it again within seconds, and a
+    # -inf left by a bad run makes every pose z = +inf, which drops all device poses (no tracking).
+    entrypoint:
+      - bash
+      - -c
+      - sed -i 's/"floor-offset":"[^"]*"/"floor-offset":"0"/' /root/.config/libsurvive/config.json; exec /home/ros/ros2_ws/entrypoint.sh "$$@"
+      - --
     working_dir: /home/ros/ros2_ws
     command: ros2 launch libsurvive_ros2 libsurvive_ros2.launch.py foxbridge:=false composable:=false

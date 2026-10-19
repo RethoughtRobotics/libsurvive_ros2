@@ -54,6 +54,7 @@ RUN apt-get update                                                              
         freeglut3-dev                                                           \
         gdb                                                                     \
         liblapacke-dev                                                          \
+        ros-${ROS_DISTRO}-rmw-zenoh-cpp                                         \
         libopenblas-dev                                                         \
         libpcap-dev                                                             \
         libusb-1.0-0-dev                                                        \
